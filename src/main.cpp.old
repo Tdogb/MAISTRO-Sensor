@@ -54,10 +54,10 @@ uint32_t firstTime;
 
 
 void setup() {
-  Serial.begin(115200);
-  while(!Serial) {};
+  Serial1.begin(115200);
+  while(!Serial1) {};
   #ifndef NO_MSP
-  msp.begin(Serial);
+  msp.begin(Serial1);
   #endif
   payload.timeMs = 3;
   payload.humidity = 8;
