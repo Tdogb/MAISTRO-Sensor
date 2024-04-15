@@ -43,9 +43,9 @@ const uint8_t _Q_coeff[pp_MAXPART][6] =
 
 #define HUMIDITY_HZ 1
 #define PRESSURE_HZ 20
-#define AIRSPEED_HZ 50
+#define AIRSPEED_HZ 20
 #define TEMP_HZ 10
-#define MSP_HZ 100
+#define MSP_HZ 3
 #define NEOPIXEL_HZ 1
 #define INITILIZATION_TRIES 20
 #define SHT30
@@ -106,7 +106,7 @@ void setup() {
     }
     pixels.show();
   }
-  lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
+  lps35hw.setDataRate(LPS35HW_RATE_25_HZ);
   lps35hw.resetPressure(); //Absolute pressure mode
   while (millis()-startTime < 3000) { //Flashing red
     dallasTemp.begin(); // Dallas temp
@@ -133,17 +133,17 @@ void setup() {
     pixels.show();
   }
   payload.timeMs = 0;
-  payload.humidity = 0;
-  payload.temp_SHT = 0;
-  payload.pressure_lps = 0;
-  payload.temp_lps = 0;
-  payload.temp_ds18b20 = 0;
-  payload.differential_pressure_up = 0;
-  payload.up_die_temp = 0;
-  payload.differential_pressure_forward = 0;
-  payload.forward_die_temp = 0;
-  payload.differential_pressure_side = 0;
-  payload.side_die_temp = 0;
+  payload.humidity = 1;
+  payload.temp_SHT = 2;
+  payload.pressure_lps = 3;
+  payload.temp_lps = 4;
+  payload.temp_ds18b20 = 5;
+  payload.differential_pressure_up = 6;
+  payload.up_die_temp = 7;
+  payload.differential_pressure_forward = 8;
+  payload.forward_die_temp = 9;
+  payload.differential_pressure_side = 10;
+  payload.side_die_temp = 11;
   firstTime = millis();
   pixels.setPixelColor(0,pixels.Color(0,255,0));
   pixels.show();

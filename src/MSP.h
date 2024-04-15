@@ -645,11 +645,11 @@ struct msp_get_custom_sensors_t {
   uint16_t temp_lps;
   uint16_t temp_ds18b20;
   uint32_t differential_pressure_forward;
-  uint32_t forward_die_temp;
+  uint16_t forward_die_temp;
   uint32_t differential_pressure_up; 
-  uint32_t up_die_temp;
+  uint16_t up_die_temp;
   uint32_t differential_pressure_side;
-  uint32_t side_die_temp;
+  uint16_t side_die_temp;
 } __attribute__ ((packed));
 
 
