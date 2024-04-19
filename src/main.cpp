@@ -4,6 +4,11 @@
 #include "ms4525do.h"
 #include "MS5525DSO.h"
 #include <Adafruit_NeoPixel.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include "Adafruit_SHT31.h"
+#include "mavlink/MAVLink.h"
+#include "wiring_private.h" // pinPeripheral() function
 
 #define MS5525DSO_CMD_RESET     ((uint8_t)0x1e)
 #define MS5525DSO_CMD_BASE_PROM ((uint8_t)0xa0)
@@ -38,51 +43,225 @@ const uint8_t _Q_coeff[pp_MAXPART][6] =
 #define T_REF_ 27271
 #define T_SENS_ 8050
 
-
 #define HUMIDITY_HZ 1
-#define PRESSURE_HZ 75
-#define AIRSPEED_HZ 100
+#define PRESSURE_HZ 20
+#define AIRSPEED_HZ 50
+#define TEMP_HZ 10
 #define MSP_HZ 100
-#define NEOPIXEL_HZ 100
+#define NEOPIXEL_HZ 1
 #define INITILIZATION_TRIES 20
 #define SHT30
-// #define NO_MSP
 
+// #define NO_MSP
+Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
 MSP msp;
+Adafruit_SHT31 sht = Adafruit_SHT31();
+Adafruit_LPS35HW lps35hw = Adafruit_LPS35HW();
+OneWire oneWire(3);
+DallasTemperature dallasTemp(&oneWire);
+DeviceAddress dallasAddr;
 msp_get_custom_sensors_t payload;
 uint32_t firstTime;
+bool sht_connected = false;
+bool lps_connected = false;
+bool dallas_connected = false;
 
+Uart Serial2(&sercom2,9,10,SERCOM_RX_PAD_0,UART_TX_PAD_2);
+void SERCOM2_Handler()
+{
+  Serial2.IrqHandler();
+}
+void convertMS5525(uint32_t pres_in, uint32_t temp_in, float *pres_out, float *temp_out);
 
 void setup() {
-  Serial.begin(9600);
-  while(!Serial) {};
+  delay(250);
+  pixels.begin();
+  Serial1.begin(115200);
+  Serial2.begin(4800);
+  pinPeripheral(9,PIO_SERCOM);
+  pinPeripheral(10,PIO_SERCOM);
+  pixels.setPixelColor(0,pixels.Color(0,0,255));
+  pixels.show();
   #ifndef NO_MSP
-  msp.begin(Serial);
+  msp.begin(Serial1);
   #endif
-  payload.timeMs = 3;
-  payload.humidity = 8;
-  payload.temp_SHT = 5;
-  payload.pressure_lps = 7;
-  payload.temp_lps = 6;
-  payload.temp_ds18b20 = 5;
-  payload.differential_pressure_up = 1;
-  payload.up_die_temp = 2;
-  payload.differential_pressure_forward = 30;
-  payload.forward_die_temp = 4;
-  payload.differential_pressure_side = 9;
-  payload.side_die_temp = 10;
+  uint32_t startTime = millis();
+  while (millis()-startTime < 3000) {
+    if (sht.begin()) {
+      sht_connected = true;
+      break;
+    }
+    #ifdef NO_MSP
+    Serial.println("Error communicating with sht");
+    #endif
+    if (millis() % 1000 > 150) { //Quick red flash, slow
+      pixels.setPixelColor(0,pixels.Color(255,0,0));
+    } else {
+      pixels.setPixelColor(0,pixels.Color(0,0,0));
+    }
+    pixels.show();
+  }
+  startTime = millis();
+  while (millis()-startTime < 3000) {
+    if (lps35hw.begin_I2C()) {
+      lps_connected = true;
+      break;
+    }
+    #ifdef NO_MSP
+    Serial.println("Couldn't find LPS35HW chip");
+    #endif
+    if (millis() % 500 > 150) { //Fast red blink
+      pixels.setPixelColor(0,pixels.Color(255,0,0));
+    } else {
+      pixels.setPixelColor(0,pixels.Color(0,0,0));
+    }
+    pixels.show();
+  }
+  lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
+  lps35hw.resetPressure(); //Absolute pressure mode
+  while (millis()-startTime < 3000) { //Flashing red
+    dallasTemp.begin(); // Dallas temp
+    dallasTemp.getAddress(dallasAddr, 0);
+    if (dallasTemp.isConnected(dallasAddr)) {
+      dallas_connected = true;
+      break;
+    }
+    if (millis() % 1000 > 500) { //Even pink blink
+      pixels.setPixelColor(0,pixels.Color(255,0,255));
+    } else {
+      pixels.setPixelColor(0,pixels.Color(0,0,0));
+    }
+    pixels.show();
+  }
+  dallasTemp.setWaitForConversion(false);
+  dallasTemp.setCheckForConversion(false);
+  while(!Serial1) {
+    if (millis() % 1000 > 500) { //Slow even blue blink
+      pixels.setPixelColor(0,pixels.Color(0,0,255));
+    } else {
+      pixels.setPixelColor(0,pixels.Color(0,0,0));
+    }
+    pixels.show();
+  }
+  payload.timeMs = 0;
+  payload.humidity = 0;
+  payload.temp_SHT = 0;
+  payload.pressure_lps = 0;
+  payload.temp_lps = 0;
+  payload.temp_ds18b20 = 0;
+  payload.differential_pressure_up = 0;
+  payload.up_die_temp = 0;
+  payload.differential_pressure_forward = 0;
+  payload.forward_die_temp = 0;
+  payload.differential_pressure_side = 0;
+  payload.side_die_temp = 0;
   firstTime = millis();
+  pixels.setPixelColor(0,pixels.Color(0,255,0));
+  pixels.show();
 }
 
 void loop() {
+  static uint32_t last_time_sht = millis();
+  static uint32_t last_time_lps = millis();
+  // static uint32_t last_time_airspeed = millis();
   static uint32_t last_time_msp = millis();
   static uint32_t last_time_neopixel = millis();
+  static uint32_t last_time_dallas_temp = millis();
+  static bool waitingOnDallasConversion = false;
 
   uint32_t start_time = millis();
   payload.timeMs = start_time-firstTime;
+  if (sht_connected && start_time - last_time_sht > 1000/HUMIDITY_HZ) {
+    sht.update();
+    payload.humidity = sht.readHumidityPacket();
+    payload.temp_SHT = sht.readTemperaturePacket();
+  }
+  start_time = millis();
+  if (lps_connected && start_time - last_time_lps > 1000/PRESSURE_HZ) {
+    payload.pressure_lps = lps35hw.readPressureRaw();
+    payload.temp_lps = lps35hw.readTemperatureRaw();
+    last_time_lps = start_time;
+  }
+  start_time = millis();
+  if (dallas_connected && !waitingOnDallasConversion && start_time - last_time_dallas_temp > 1000/TEMP_HZ) {
+    dallasTemp.requestTemperatures();
+    waitingOnDallasConversion = true;
+    last_time_dallas_temp = millis();
+  }
+  if (dallas_connected && waitingOnDallasConversion && dallasTemp.isConversionComplete()) {
+      payload.temp_ds18b20 = dallasTemp.celsiusToRaw(dallasTemp.getTempC((uint8_t*) dallasAddr));
+      waitingOnDallasConversion = false;
+  }
+  #ifndef NO_MSP
   start_time = millis();
   if (start_time - last_time_msp > 1000/MSP_HZ) {
     msp.command(MSP_GET_CUSTOM_SENSORS, &payload, sizeof(payload));
     last_time_msp = start_time;
   }
+  #else
+  start_time = millis();
+  if (start_time - last_time_msp > 1000/1) {
+    int32_t stemp, shum;
+    float temp, humidity;
+    temp = (payload.temp_SHT * 175.0f) / 65535.0f - 45.0f;
+    humidity = (payload.humidity * 100.0f) / 65535.0f;
+    Serial.print("Millis: ");
+    Serial.print(payload.timeMs);
+    Serial.print("\t Humidity: ");
+    Serial.print(humidity);
+    Serial.print(" SHT Temp: ");
+    Serial.print(temp);
+    Serial.print('\t');
+
+    // Atmospheric pressure
+    if (payload.pressure_lps & 0x800000) {
+      payload.pressure_lps = (0xff000000 | payload.pressure_lps);
+    }
+    Serial.print("Atmospheric pressure: ");
+    Serial.print(payload.pressure_lps / 4096.0);
+    Serial.print("\t");
+
+    Serial.print("Dallas Temp: ");
+    Serial.print(dallasTemp.rawToCelsius(payload.temp_ds18b20));
+    Serial.println("");
+    last_time_msp = start_time;
+  }
+  #endif
+  start_time = millis();
+  static bool neopixel_state = true;
+  if (start_time - last_time_neopixel > 1000/NEOPIXEL_HZ) {
+    if(neopixel_state){
+      pixels.setPixelColor(0,pixels.Color(0,255,0));
+    } else {
+      pixels.setPixelColor(0,pixels.Color(0,0,0));
+    }
+    pixels.show();
+    neopixel_state = !neopixel_state;
+    // static uint16_t color = 65432/2;
+    // pixels.rainbow(color);
+    // pixels.show();
+    // color+=1000; if (color >= 65432) {color = 0;}
+    last_time_neopixel = start_time;
+  }
+}
+
+void convertMS5525(uint32_t pres_in, uint32_t temp_in, float *pres_out, float *temp_out) {
+  //MS5525
+  float p_ms5525_for, t_ms5525_for;
+  // Difference between actual and reference temperature
+  int64_t dT = temp_in - ((int64_t)T_REF_ << Q5_);
+
+  // Offset at actual temperature
+  int64_t off = ((int64_t)P_OFF_ << Q2_) + ((TC_OFF_ * dT) >> Q4_);
+
+  // Sensitivity at actual temperature
+  int64_t sens = ((int64_t)P_SENS_ << Q1_) + ((TC_SENS_ * dT) >> Q3_);
+
+  // Temperature compensated pressure
+  int64_t tc_press = (((sens * pres_in) >> 21) - off) >> 15;
+  p_ms5525_for = tc_press * 0.0001f;
+
+  t_ms5525_for = (2000 + ((dT * T_SENS_) >> Q6_)) * 0.01f;
+  *pres_out = p_ms5525_for;
+  *temp_out = t_ms5525_for;
 }
