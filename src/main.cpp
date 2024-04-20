@@ -47,7 +47,8 @@ const uint8_t _Q_coeff[pp_MAXPART][6] =
 #define PRESSURE_HZ 20
 #define AIRSPEED_HZ 50
 #define TEMP_HZ 10
-#define MSP_HZ 100
+#define MSP_HZ 50
+#define MAV_HZ 20
 #define NEOPIXEL_HZ 1
 #define INITILIZATION_TRIES 20
 #define SHT30
@@ -66,7 +67,7 @@ bool sht_connected = false;
 bool lps_connected = false;
 bool dallas_connected = false;
 
-Uart Serial2(&sercom2,9,10,SERCOM_RX_PAD_0,UART_TX_PAD_2);
+Uart Serial2(&sercom2,9,10,SERCOM_RX_PAD_1,UART_TX_PAD_2);
 void SERCOM2_Handler()
 {
   Serial2.IrqHandler();
@@ -74,14 +75,14 @@ void SERCOM2_Handler()
 void convertMS5525(uint32_t pres_in, uint32_t temp_in, float *pres_out, float *temp_out);
 
 void setup() {
-  delay(250);
   pixels.begin();
-  Serial1.begin(115200);
-  Serial2.begin(4800);
-  pinPeripheral(9,PIO_SERCOM);
-  pinPeripheral(10,PIO_SERCOM);
   pixels.setPixelColor(0,pixels.Color(0,0,255));
   pixels.show();
+  delay(200);
+  pinPeripheral(9,PIO_SERCOM);
+  pinPeripheral(10,PIO_SERCOM);
+  Serial1.begin(115200);
+  Serial2.begin(4800);
   #ifndef NO_MSP
   msp.begin(Serial1);
   #endif
@@ -100,6 +101,7 @@ void setup() {
       pixels.setPixelColor(0,pixels.Color(0,0,0));
     }
     pixels.show();
+    delay(50);
   }
   startTime = millis();
   while (millis()-startTime < 3000) {
@@ -116,9 +118,12 @@ void setup() {
       pixels.setPixelColor(0,pixels.Color(0,0,0));
     }
     pixels.show();
+    delay(50);
   }
-  lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
-  lps35hw.resetPressure(); //Absolute pressure mode
+  if (lps_connected) {
+    lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
+    lps35hw.resetPressure(); //Absolute pressure mode
+  }
   while (millis()-startTime < 3000) { //Flashing red
     dallasTemp.begin(); // Dallas temp
     dallasTemp.getAddress(dallasAddr, 0);
@@ -158,6 +163,7 @@ void setup() {
   firstTime = millis();
   pixels.setPixelColor(0,pixels.Color(0,255,0));
   pixels.show();
+  delay(5000);
 }
 
 void loop() {
@@ -167,6 +173,7 @@ void loop() {
   static uint32_t last_time_msp = millis();
   static uint32_t last_time_neopixel = millis();
   static uint32_t last_time_dallas_temp = millis();
+  static uint32_t last_time_mav = millis();
   static bool waitingOnDallasConversion = false;
 
   uint32_t start_time = millis();
@@ -227,6 +234,18 @@ void loop() {
     last_time_msp = start_time;
   }
   #endif
+
+  start_time = millis();
+  if (start_time - last_time_mav > 1000/MAV_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+
+    mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC, MAV_MODE_FLAG_MANUAL_INPUT_ENABLED, 0, MAV_STATE_STANDBY);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_mav = start_time;
+  }
+
   start_time = millis();
   static bool neopixel_state = true;
   if (start_time - last_time_neopixel > 1000/NEOPIXEL_HZ) {
