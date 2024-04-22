@@ -7,8 +7,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "Adafruit_SHT31.h"
-#include "mavlink/MAVLink.h"
-#include "wiring_private.h" // pinPeripheral() function
+#include <Wire.h>
 
 #define MS5525DSO_CMD_RESET     ((uint8_t)0x1e)
 #define MS5525DSO_CMD_BASE_PROM ((uint8_t)0xa0)
@@ -45,10 +44,9 @@ const uint8_t _Q_coeff[pp_MAXPART][6] =
 
 #define HUMIDITY_HZ 1
 #define PRESSURE_HZ 20
-#define AIRSPEED_HZ 50
+#define AIRSPEED_HZ 20
 #define TEMP_HZ 10
-#define MSP_HZ 50
-#define MAV_HZ 20
+#define MSP_HZ 3
 #define NEOPIXEL_HZ 1
 #define INITILIZATION_TRIES 20
 #define SHT30
@@ -56,7 +54,7 @@ const uint8_t _Q_coeff[pp_MAXPART][6] =
 // #define NO_MSP
 Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
 MSP msp;
-Adafruit_SHT31 sht = Adafruit_SHT31();
+Adafruit_SHT31 sht = Adafruit_SHT31(&Wire);
 Adafruit_LPS35HW lps35hw = Adafruit_LPS35HW();
 OneWire oneWire(3);
 DallasTemperature dallasTemp(&oneWire);
@@ -66,28 +64,23 @@ uint32_t firstTime;
 bool sht_connected = false;
 bool lps_connected = false;
 bool dallas_connected = false;
-
-Uart Serial2(&sercom2,9,10,SERCOM_RX_PAD_1,UART_TX_PAD_2); //TX is MOSI, RX is MISO
-void SERCOM2_Handler()
-{
-  Serial2.IrqHandler();
-}
 void convertMS5525(uint32_t pres_in, uint32_t temp_in, float *pres_out, float *temp_out);
 
 void setup() {
+  delay(50);
   pixels.begin();
-  pixels.setBrightness(10);
-  pixels.setPixelColor(0,pixels.Color(255,0,0));
-  pixels.show();
-  delay(200);
-  pinPeripheral(9,PIO_SERCOM);
-  pinPeripheral(10,PIO_SERCOM);
-  Serial1.begin(9600);
-  Serial2.begin(4800);
   #ifndef NO_MSP
-  msp.begin(Serial1,50);
+  Serial.begin(115200);
+  Serial.println("hi");
   #endif
-
+  Serial1.begin(115200);
+  while(!Serial1) {};
+  delay(50);
+  pixels.setPixelColor(0,pixels.Color(0,0,255));
+  pixels.show();
+  #ifndef NO_MSP
+  msp.begin(Serial1);
+  #endif
   uint32_t startTime = millis();
   while (millis()-startTime < 3000) {
     if (sht.begin()) {
@@ -103,11 +96,13 @@ void setup() {
       pixels.setPixelColor(0,pixels.Color(0,0,0));
     }
     pixels.show();
-    delay(50);
+    delay(20);
   }
   startTime = millis();
   while (millis()-startTime < 3000) {
     if (lps35hw.begin_I2C()) {
+      lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
+      lps35hw.resetPressure(); //Absolute pressure mode
       lps_connected = true;
       break;
     }
@@ -115,6 +110,25 @@ void setup() {
     Serial.println("Couldn't find LPS35HW chip");
     #endif
     if (millis() % 500 > 150) { //Fast red blink
+      pixels.setPixelColor(0,pixels.Color(0,0,255));
+    } else {
+      pixels.setPixelColor(0,pixels.Color(0,0,0));
+    }
+    pixels.show();
+    delay(20);
+  }
+
+  while (millis()-startTime < 3000) { //Flashing red
+    dallasTemp.begin(); // Dallas temp
+    if (dallasTemp.getAddress(dallasAddr, 0)) {
+        dallasTemp.setWaitForConversion(false);
+        dallasTemp.setCheckForConversion(false);
+        dallas_connected = true;
+    }
+    if (dallasTemp.getAddress(dallasAddr, 0)) {
+      break;
+    }
+    if (millis() % 1000 > 500) { //Even pink blink
       pixels.setPixelColor(0,pixels.Color(255,0,0));
     } else {
       pixels.setPixelColor(0,pixels.Color(0,0,0));
@@ -122,51 +136,28 @@ void setup() {
     pixels.show();
     delay(50);
   }
-  if (lps_connected) {
-    lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
-    lps35hw.resetPressure(); //Absolute pressure mode
-  }
-  while (millis()-startTime < 3000) { //Flashing red
-    dallasTemp.begin(); // Dallas temp
-    dallasTemp.getAddress(dallasAddr, 0);
-    if (dallasTemp.isConnected(dallasAddr)) {
-      dallas_connected = true;
-      break;
-    }
-    if (millis() % 1000 > 500) { //Even pink blink
-      pixels.setPixelColor(0,pixels.Color(255,0,255));
-    } else {
-      pixels.setPixelColor(0,pixels.Color(0,0,0));
-    }
-    pixels.show();
-  }
-  dallasTemp.setWaitForConversion(false);
-  dallasTemp.setCheckForConversion(false);
   while(!Serial1) {
     if (millis() % 1000 > 500) { //Slow even blue blink
-      pixels.setBrightness(100);
       pixels.setPixelColor(0,pixels.Color(0,0,255));
     } else {
       pixels.setPixelColor(0,pixels.Color(0,0,0));
     }
     pixels.show();
+    delay(20);
   }
   payload.timeMs = 0;
-  payload.humidity = 0;
-  payload.temp_SHT = 0;
-  payload.pressure_lps = 0;
-  payload.temp_lps = 0;
-  payload.temp_ds18b20 = 0;
-  payload.differential_pressure_up = 0;
-  payload.up_die_temp = 0;
-  payload.differential_pressure_forward = 0;
-  payload.forward_die_temp = 0;
-  payload.differential_pressure_side = 0;
-  payload.side_die_temp = 0;
+  payload.humidity = 1;
+  payload.temp_SHT = 2;
+  payload.pressure_lps = 3;
+  payload.temp_lps = 4;
+  payload.temp_ds18b20 = 5;
+  payload.differential_pressure_up = 6;
+  payload.up_die_temp = 7;
+  payload.differential_pressure_forward = 8;
+  payload.forward_die_temp = 9;
+  payload.differential_pressure_side = 10;
+  payload.side_die_temp = 11;
   firstTime = millis();
-  pixels.setPixelColor(0,pixels.Color(0,255,0));
-  pixels.show();
-  delay(5000);
 }
 
 void loop() {
@@ -176,7 +167,6 @@ void loop() {
   static uint32_t last_time_msp = millis();
   static uint32_t last_time_neopixel = millis();
   static uint32_t last_time_dallas_temp = millis();
-  static uint32_t last_time_mav = millis();
   static bool waitingOnDallasConversion = false;
 
   uint32_t start_time = millis();
@@ -237,60 +227,6 @@ void loop() {
     last_time_msp = start_time;
   }
   #endif
-
-  start_time = millis();
-  if (start_time - last_time_mav > 1000/MAV_HZ) {
-    {
-      mavlink_message_t msg;
-      uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-      mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC, MAV_MODE_FLAG_MANUAL_INPUT_ENABLED, 0, MAV_STATE_STANDBY);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial2.write(buf, len);
-      last_time_mav = start_time;
-    }
-    {
-      mavlink_message_t msg;
-      uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-      msp_raw_imu_t msp_packet;
-      mavlink_raw_imu_t mav_packet;
-      msp.request(MSP_RAW_IMU,&msp_packet,sizeof(msp_packet));
-      mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.acc[0],msp_packet.acc[1],msp_packet.acc[2]
-      , msp_packet.gyro[0],msp_packet.gyro[1],msp_packet.gyro[2]
-      , msp_packet.mag[0],msp_packet.mag[1],msp_packet.mag[2],0,1);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial2.write(buf, len);
-      last_time_mav = start_time;
-    }
-    {
-      mavlink_message_t msg;
-      uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-      msp_raw_gps_t msp_packet;
-      mavlink_gps_raw_int_t mav_packet;
-      msp.request(MSP_RAW_GPS,&msp_packet,sizeof(msp_packet));
-      mavlink_msg_gps_raw_int_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.fixType, msp_packet.lat, msp_packet.lon,
-      msp_packet.alt,UINT16_MAX,UINT16_MAX,msp_packet.groundSpeed,msp_packet.groundCourse,msp_packet.numSat,0,0,0,0,0,0);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial2.write(buf, len);
-      last_time_mav = start_time;
-    }
-
-    // {
-    //   mavlink_message_t msg;
-    //   uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    //   msp_altitude_t msp_packet;
-    //   mavlink_raw_pressure_t mav_packet;
-    //   msp.request(MSP_ALTITUDE,&msp_packet,sizeof(msp_packet));
-    //   mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.baroLatestAltitude);
-    //   uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-    //   Serial2.write(buf, len);
-    //   last_time_mav = start_time;
-    // }
-    // msp_attitude_t
-    // mavlink_attitude_t
-    // mavlink_raw_pressure_t
-    // mavlink_hygrometer_sensor_t
-  }
-
   start_time = millis();
   static bool neopixel_state = true;
   if (start_time - last_time_neopixel > 1000/NEOPIXEL_HZ) {
