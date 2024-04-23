@@ -10,39 +10,6 @@
 #include "mavlink/MAVLink.h"
 #include "wiring_private.h" // pinPeripheral() function
 
-#define MS5525DSO_CMD_RESET     ((uint8_t)0x1e)
-#define MS5525DSO_CMD_BASE_PROM ((uint8_t)0xa0)
-#define MS5525DSO_CMD_CONVERT   ((uint8_t)0x40)
-// Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
-const uint8_t _Q_coeff[pp_MAXPART][6] =
-{
-  { 15, 17, 7, 5, 7, 21 }, // pp001DS
-  { 14, 16, 8, 6, 7, 22 }, // pp002GS
-  { 16, 18, 6, 4, 7, 22 }, // pp002DS
-  { 16, 17, 6, 5, 7, 21 }, // pp005GS
-  { 17, 19, 5, 3, 7, 22 }, // pp005DS
-  { 16, 17, 6, 5, 7, 22 }, // pp015GS
-  { 16, 17, 6, 5, 7, 22 }, // pp015AS
-  { 17, 19, 5, 3, 7, 22 }, // pp015DS
-  { 17, 18, 5, 4, 7, 22 }, // pp030AS
-  { 17, 18, 5, 4, 7, 22 }, // pp030GS
-  { 18, 21, 4, 1, 7, 22 }, // pp030DS
-};
-
-/* These #defines are only valid inside a class instance method */
-#define Q1_      (_Q_coeff[0][0])
-#define Q2_      (_Q_coeff[0][1])
-#define Q3_      (_Q_coeff[0][2])
-#define Q4_      (_Q_coeff[0][3])
-#define Q5_      (_Q_coeff[0][4])
-#define Q6_      (_Q_coeff[0][5])
-#define P_SENS_ 14430
-#define P_OFF_ 9904
-#define TC_SENS_ 3520
-#define TC_OFF_ 1949
-#define T_REF_ 27271
-#define T_SENS_ 8050
-
 #define HUMIDITY_HZ 1
 #define PRESSURE_HZ 20
 #define AIRSPEED_HZ 50
@@ -50,15 +17,24 @@ const uint8_t _Q_coeff[pp_MAXPART][6] =
 #define MSP_HZ 50
 #define MAV_HZ 20
 #define NEOPIXEL_HZ 1
-#define INITILIZATION_TRIES 20
-#define SHT30
+
+#define MAV_HEARTBEAT_HZ 4
+#define MAV_RAW_IMU_HZ 4
+#define MAV_ATTITUDE_HZ 4
+#define MAV_GPS_HZ 4
+#define MAV_HUMIDITY_HZ 1
+#define MAV_PRESSURE_HZ 4
+
+#define DALLAS_PIN 3
+#define MAVLINK_RX_PIN 9 //MISO
+#define MAVLINK_TX_PIN 10 //MOSI
 
 // #define NO_MSP
 Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
 MSP msp;
 Adafruit_SHT31 sht = Adafruit_SHT31();
 Adafruit_LPS35HW lps35hw = Adafruit_LPS35HW();
-OneWire oneWire(3);
+OneWire oneWire(DALLAS_PIN);
 DallasTemperature dallasTemp(&oneWire);
 DeviceAddress dallasAddr;
 msp_get_custom_sensors_t payload;
@@ -67,12 +43,11 @@ bool sht_connected = false;
 bool lps_connected = false;
 bool dallas_connected = false;
 
-Uart Serial2(&sercom2,9,10,SERCOM_RX_PAD_1,UART_TX_PAD_2); //TX is MOSI, RX is MISO
+Uart Serial2(&sercom2,MAVLINK_RX_PIN,MAVLINK_TX_PIN,SERCOM_RX_PAD_1,UART_TX_PAD_2); //TX is MOSI, RX is MISO
 void SERCOM2_Handler()
 {
   Serial2.IrqHandler();
 }
-void convertMS5525(uint32_t pres_in, uint32_t temp_in, float *pres_out, float *temp_out);
 
 void setup() {
   pixels.begin();
@@ -82,10 +57,12 @@ void setup() {
   delay(200);
   pinPeripheral(9,PIO_SERCOM);
   pinPeripheral(10,PIO_SERCOM);
+  Serial.begin(115200);
   Serial1.begin(9600);
   Serial2.begin(4800);
+  while (!Serial1) {}
   #ifndef NO_MSP
-  msp.begin(Serial1,50);
+  msp.begin(Serial1);
   #endif
 
   uint32_t startTime = millis();
@@ -202,94 +179,76 @@ void loop() {
       payload.temp_ds18b20 = dallasTemp.celsiusToRaw(dallasTemp.getTempC((uint8_t*) dallasAddr));
       waitingOnDallasConversion = false;
   }
-  #ifndef NO_MSP
+
+  static bool serial2_detected = false;
+  static uint32_t last_time_heartbeat_mav = 0, last_time_raw_imu_mav = 0, last_time_raw_gps_mav = 0, last_time_attitude_mav = 0, last_time_humidity_mav = 0, last_time_raw_pressure_mav = 0;
+  // if (start_time - last_time_mav > 1000/MAV_HZ) {
+  while (!serial2_detected && !Serial2) {}
+  serial2_detected = true;
   start_time = millis();
-  if (start_time - last_time_msp > 1000/MSP_HZ) {
-    msp.command(MSP_GET_CUSTOM_SENSORS, &payload, sizeof(payload));
-    last_time_msp = start_time;
+  if (start_time - last_time_heartbeat_mav > 1000/MAV_HEARTBEAT_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC, MAV_MODE_FLAG_MANUAL_INPUT_ENABLED, 0, MAV_STATE_STANDBY);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_heartbeat_mav = start_time;
   }
-  #else
   start_time = millis();
-  if (start_time - last_time_msp > 1000/1) {
-    int32_t stemp, shum;
-    float temp, humidity;
-    temp = (payload.temp_SHT * 175.0f) / 65535.0f - 45.0f;
-    humidity = (payload.humidity * 100.0f) / 65535.0f;
-    Serial.print("Millis: ");
-    Serial.print(payload.timeMs);
-    Serial.print("\t Humidity: ");
-    Serial.print(humidity);
-    Serial.print(" SHT Temp: ");
-    Serial.print(temp);
-    Serial.print('\t');
-
-    // Atmospheric pressure
-    if (payload.pressure_lps & 0x800000) {
-      payload.pressure_lps = (0xff000000 | payload.pressure_lps);
-    }
-    Serial.print("Atmospheric pressure: ");
-    Serial.print(payload.pressure_lps / 4096.0);
-    Serial.print("\t");
-
-    Serial.print("Dallas Temp: ");
-    Serial.print(dallasTemp.rawToCelsius(payload.temp_ds18b20));
-    Serial.println("");
-    last_time_msp = start_time;
+  if (start_time - last_time_raw_imu_mav > 1000/MAV_RAW_IMU_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    msp_raw_imu_t msp_packet;
+    msp.request(MSP_RAW_IMU,&msp_packet,sizeof(msp_packet));
+    mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.acc[0],msp_packet.acc[1],msp_packet.acc[2]
+    , msp_packet.gyro[0],msp_packet.gyro[1],msp_packet.gyro[2]
+    , msp_packet.mag[0],msp_packet.mag[1],msp_packet.mag[2],0,1);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_raw_imu_mav = start_time;
   }
-  #endif
-
   start_time = millis();
-  if (start_time - last_time_mav > 1000/MAV_HZ) {
-    {
-      mavlink_message_t msg;
-      uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-      mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC, MAV_MODE_FLAG_MANUAL_INPUT_ENABLED, 0, MAV_STATE_STANDBY);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial2.write(buf, len);
-      last_time_mav = start_time;
-    }
-    {
-      mavlink_message_t msg;
-      uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-      msp_raw_imu_t msp_packet;
-      mavlink_raw_imu_t mav_packet;
-      msp.request(MSP_RAW_IMU,&msp_packet,sizeof(msp_packet));
-      mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.acc[0],msp_packet.acc[1],msp_packet.acc[2]
-      , msp_packet.gyro[0],msp_packet.gyro[1],msp_packet.gyro[2]
-      , msp_packet.mag[0],msp_packet.mag[1],msp_packet.mag[2],0,1);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial2.write(buf, len);
-      last_time_mav = start_time;
-    }
-    {
-      mavlink_message_t msg;
-      uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-      msp_raw_gps_t msp_packet;
-      mavlink_gps_raw_int_t mav_packet;
-      msp.request(MSP_RAW_GPS,&msp_packet,sizeof(msp_packet));
-      mavlink_msg_gps_raw_int_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.fixType, msp_packet.lat, msp_packet.lon,
-      msp_packet.alt,UINT16_MAX,UINT16_MAX,msp_packet.groundSpeed,msp_packet.groundCourse,msp_packet.numSat,0,0,0,0,0,0);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial2.write(buf, len);
-      last_time_mav = start_time;
-    }
-
-    // {
-    //   mavlink_message_t msg;
-    //   uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    //   msp_altitude_t msp_packet;
-    //   mavlink_raw_pressure_t mav_packet;
-    //   msp.request(MSP_ALTITUDE,&msp_packet,sizeof(msp_packet));
-    //   mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.baroLatestAltitude);
-    //   uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-    //   Serial2.write(buf, len);
-    //   last_time_mav = start_time;
-    // }
-    // msp_attitude_t
-    // mavlink_attitude_t
-    // mavlink_raw_pressure_t
-    // mavlink_hygrometer_sensor_t
+  if (start_time - last_time_attitude_mav > 1000/MAV_ATTITUDE_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    msp_attitude_t msp_packet;
+    msp.request(MSP_ATTITUDE,&msp_packet,sizeof(msp_packet));
+    mavlink_msg_attitude_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.roll/10.0f, msp_packet.pitch/10.0f, msp_packet.yaw/1.0f,0.0f,0.0f,0.0f);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_attitude_mav = start_time;
   }
+  start_time = millis();
+  if (start_time - last_time_raw_gps_mav > 1000/MAV_GPS_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    msp_raw_gps_t msp_packet;
+    msp.request(MSP_RAW_GPS,&msp_packet,sizeof(msp_packet));
+    mavlink_msg_gps_raw_int_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.fixType, msp_packet.lat, msp_packet.lon,
+    msp_packet.alt,UINT16_MAX,UINT16_MAX,msp_packet.groundSpeed,msp_packet.groundCourse,msp_packet.numSat,0,0,0,0,0,0);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_raw_gps_mav = start_time;
+  }
+  start_time = millis();
+  if (start_time - last_time_humidity_mav > 1000/MAV_HUMIDITY_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_hygrometer_sensor_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), payload.temp_SHT, payload.humidity);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_humidity_mav = start_time;
+  }
+  start_time = millis();
+  if (start_time - last_time_raw_pressure_mav > 1000/MAV_PRESSURE_HZ) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(),payload.pressure_lps,payload.differential_pressure_forward,payload.forward_die_temp,payload.temp_lps);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial2.write(buf, len);
+    last_time_raw_pressure_mav = start_time;
+  }
+  // }
 
   start_time = millis();
   static bool neopixel_state = true;
@@ -301,31 +260,6 @@ void loop() {
     }
     pixels.show();
     neopixel_state = !neopixel_state;
-    // static uint16_t color = 65432/2;
-    // pixels.rainbow(color);
-    // pixels.show();
-    // color+=1000; if (color >= 65432) {color = 0;}
     last_time_neopixel = start_time;
   }
-}
-
-void convertMS5525(uint32_t pres_in, uint32_t temp_in, float *pres_out, float *temp_out) {
-  //MS5525
-  float p_ms5525_for, t_ms5525_for;
-  // Difference between actual and reference temperature
-  int64_t dT = temp_in - ((int64_t)T_REF_ << Q5_);
-
-  // Offset at actual temperature
-  int64_t off = ((int64_t)P_OFF_ << Q2_) + ((TC_OFF_ * dT) >> Q4_);
-
-  // Sensitivity at actual temperature
-  int64_t sens = ((int64_t)P_SENS_ << Q1_) + ((TC_SENS_ * dT) >> Q3_);
-
-  // Temperature compensated pressure
-  int64_t tc_press = (((sens * pres_in) >> 21) - off) >> 15;
-  p_ms5525_for = tc_press * 0.0001f;
-
-  t_ms5525_for = (2000 + ((dT * T_SENS_) >> Q6_)) * 0.01f;
-  *pres_out = p_ms5525_for;
-  *temp_out = t_ms5525_for;
 }
