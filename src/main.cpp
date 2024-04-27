@@ -11,11 +11,9 @@
 #include "wiring_private.h" // pinPeripheral() function
 
 #define HUMIDITY_HZ 1
-#define PRESSURE_HZ 20
+#define PRESSURE_HZ 75
 #define AIRSPEED_HZ 50
 #define TEMP_HZ 10
-#define MSP_HZ 50
-#define MAV_HZ 20
 #define NEOPIXEL_HZ 1
 
 #define MAV_HEARTBEAT_HZ 4
@@ -26,8 +24,8 @@
 #define MAV_PRESSURE_HZ 4
 
 #define DALLAS_PIN 3
-#define MAVLINK_RX_PIN 9 //MISO
-#define MAVLINK_TX_PIN 10 //MOSI
+#define MAVLINK_RX_PIN 9
+#define MAVLINK_TX_PIN 4
 
 // #define NO_MSP
 Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
@@ -55,8 +53,8 @@ void setup() {
   pixels.setPixelColor(0,pixels.Color(255,0,0));
   pixels.show();
   delay(200);
-  pinPeripheral(9,PIO_SERCOM);
-  pinPeripheral(10,PIO_SERCOM);
+  // pinPeripheral(MAVLINK_RX_PIN,PIO_SERCOM);
+  pinPeripheral(MAVLINK_TX_PIN,PIO_SERCOM);
   Serial.begin(115200);
   Serial1.begin(9600);
   Serial2.begin(4800);
