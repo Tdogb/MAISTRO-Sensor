@@ -9,6 +9,28 @@
 #include "mavlink/MAVLink.h"
 #include "wiring_private.h" // pinPeripheral() function
 #include "SensorFilter.h"
+#include <Adafruit_SPIFlash.h>
+#include "flash_config.h"
+
+/*
+HEADER
+ADDR 0x00-0x07: last addr
+ADDR 0x08-0x09: CODE VERSION
+
+BODY
+START:
+*/
+
+enum flash_ids {
+  HUMIDITY = 0,
+  PRESSURE = 1,
+  AIRSPEED = 2,
+  TEMP = 3,
+  UV = 4
+};
+#define VERSION 1
+#define FLASH
+#define DEFAULT_STARTING_ADDR 0x10
 
 #define HUMIDITY_HZ 1
 #define PRESSURE_HZ 75
@@ -33,6 +55,7 @@
 
 // #define NO_MSP
 Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
+Adafruit_SPIFlash flash(&flashTransport);
 MSP msp;
 Adafruit_SHT31 sht = Adafruit_SHT31();
 Adafruit_LPS35HW lps35hw = Adafruit_LPS35HW();
@@ -47,6 +70,7 @@ bool lps_connected = false;
 bool dallas_connected = false;
 bool diff_pres_forward_connected = false;
 bool uv_connected = false;
+uint32_t last_flash_addr = DEFAULT_STARTING_ADDR;
 
 SensorFilter<typeof(payload.humidity)> humidity_filter(HUMIDITY_HZ,MSP_HZ);
 SensorFilter<typeof(payload.temp_SHT)> temp_sht_filter(HUMIDITY_HZ,MSP_HZ);
@@ -69,6 +93,11 @@ void setup() {
   pixels.setPixelColor(0,pixels.Color(255,0,0));
   pixels.show();
   delay(200);
+  #ifdef FLASH
+  flash.begin();
+  last_flash_addr = flash.read32(0);
+  if (last_flash_addr == 0) { last_flash_addr = DEFAULT_STARTING_ADDR; }
+  #endif
   // pinPeripheral(MAVLINK_RX_PIN,PIO_SERCOM);
   pinPeripheral(MAVLINK_TX_PIN,PIO_SERCOM);
   Serial.begin(115200);
@@ -227,6 +256,10 @@ void loop() {
   if (uv_connected && start_time - last_time_uv > 1000/UV_HZ) {
      uv_filter.update_sensor(analogRead(A0));
   }
+
+  #ifdef FLASH
+    flash.writeBuffer()
+  #endif
 
   #ifdef PLANE
   start_time = millis();

@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "*.good": "c"
+        "*.good": "c",
+        "arduino.h": "c"
     }
 }
