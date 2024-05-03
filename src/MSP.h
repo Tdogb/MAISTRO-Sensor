@@ -39,6 +39,7 @@
 #define MSP_ARMING_CONFIG         61
 #define MSP_RX_MAP                64 // get channel map (also returns number of channels total)
 #define MSP_LOOP_TIME             73 // FC cycle time i.e looptime parameter
+#define MSP_BLACKBOX_CONFIG       80
 #define MSP_STATUS               101
 #define MSP_RAW_IMU              102
 #define MSP_SERVO                103
@@ -650,6 +651,16 @@ struct msp_get_custom_sensors_t {
   uint16_t up_die_temp;
   uint32_t differential_pressure_side;
   uint16_t side_die_temp;
+} __attribute__ ((packed));
+
+struct msp_get_blackbox_t {
+  uint8_t is_blackbox_supported;
+  uint8_t device;
+  uint8_t rate; //Not used
+  uint8_t rate_denom;
+  uint16_t PRatio;
+  uint8_t sample_rate;
+  uint32_t blackbox_number_tornado;
 } __attribute__ ((packed));
 
 

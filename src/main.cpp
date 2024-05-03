@@ -5,11 +5,11 @@
 #include <Adafruit_NeoPixel.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Adafruit_SPIFlash.h>
 #include "Adafruit_SHT31.h"
 #include "mavlink/MAVLink.h"
 #include "wiring_private.h" // pinPeripheral() function
 #include "SensorFilter.h"
-#include <Adafruit_SPIFlash.h>
 #include "flash_config.h"
 
 /*
@@ -22,15 +22,15 @@ START:
 */
 
 enum flash_ids {
-  HUMIDITY = 0,
-  PRESSURE = 1,
-  AIRSPEED = 2,
-  TEMP = 3,
-  UV = 4
+  TIME = 0,
+  HUMIDITY = 1,
+  PRESSURE = 2,
+  AIRSPEED = 3,
+  TEMP = 4,
+  UV = 5
 };
 #define VERSION 1
-#define FLASH
-#define DEFAULT_STARTING_ADDR 0x10
+#define DEFAULT_STARTING_ADDR 0x50
 
 #define HUMIDITY_HZ 1
 #define PRESSURE_HZ 75
@@ -39,7 +39,9 @@ enum flash_ids {
 #define MSP_HZ 10
 #define NEOPIXEL_HZ 1
 #define UV_HZ 30
+#define FLASH_HZ 30
 
+#define MAV_TIMING_UPDATE 4  //Used for timing
 #define MAV_HEARTBEAT_HZ 4
 #define MAV_RAW_IMU_HZ 4
 #define MAV_ATTITUDE_HZ 4
@@ -47,13 +49,15 @@ enum flash_ids {
 #define MAV_HUMIDITY_HZ 1
 #define MAV_PRESSURE_HZ 4
 
-#define DALLAS_PIN 3
-#define MAVLINK_RX_PIN 9
-#define MAVLINK_TX_PIN 10
+#define DALLAS_PIN 1
+#define MAVLINK_RX_PIN 3
+#define MAVLINK_TX_PIN 2
 
-#define PLANE
-
+// #define PLANE
+#define FLASH
 // #define NO_MSP
+
+void uint32ToUint8Array(uint32_t value, uint8_t* array);
 Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
 Adafruit_SPIFlash flash(&flashTransport);
 MSP msp;
@@ -71,23 +75,33 @@ bool dallas_connected = false;
 bool diff_pres_forward_connected = false;
 bool uv_connected = false;
 uint32_t last_flash_addr = DEFAULT_STARTING_ADDR;
+uint32_t blackbox_number = 0;
+uint16_t PRatio = 0;
+uint8_t sample_rate = 0;
+uint64_t mcu_micros_delta = 0;
+bool mcu_millis_less_than_msp = false;
 
-SensorFilter<typeof(payload.humidity)> humidity_filter(HUMIDITY_HZ,MSP_HZ);
-SensorFilter<typeof(payload.temp_SHT)> temp_sht_filter(HUMIDITY_HZ,MSP_HZ);
-SensorFilter<typeof(payload.pressure_lps)> pressure_lps_filter(PRESSURE_HZ,MSP_HZ);
-SensorFilter<typeof(payload.temp_lps)> temp_lps_filter(PRESSURE_HZ,MSP_HZ);
-SensorFilter<typeof(payload.temp_ds18b20)> temp_ds18b20_filter(TEMP_HZ,MSP_HZ);
-SensorFilter<typeof(payload.differential_pressure_forward)> differential_pressure_forward_filter(AIRSPEED_HZ,MSP_HZ);
-SensorFilter<typeof(payload.forward_die_temp)> forward_die_temp_filter(AIRSPEED_HZ,MSP_HZ);
-SensorFilter<typeof(payload.differential_pressure_up)> uv_filter(UV_HZ,MSP_HZ);
+uint64_t calculate_micros(void);
 
-Uart Serial2(&sercom2,MAVLINK_RX_PIN,MAVLINK_TX_PIN,SERCOM_RX_PAD_1,UART_TX_PAD_2); //TX is MOSI, RX is MISO
+SensorFilter<typeof(payload.humidity)> humidity_filter(HUMIDITY_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.temp_SHT)> temp_sht_filter(HUMIDITY_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.pressure_lps)> pressure_lps_filter(PRESSURE_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.temp_lps)> temp_lps_filter(PRESSURE_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.temp_ds18b20)> temp_ds18b20_filter(TEMP_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.differential_pressure_forward)> differential_pressure_forward_filter(AIRSPEED_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.forward_die_temp)> forward_die_temp_filter(AIRSPEED_HZ,MSP_HZ,FLASH_HZ);
+SensorFilter<typeof(payload.differential_pressure_up)> uv_filter(UV_HZ,MSP_HZ,FLASH_HZ);
+
+Uart Serial2(&sercom2,MAVLINK_RX_PIN,MAVLINK_TX_PIN,SERCOM_RX_PAD_1,UART_TX_PAD_0); //TX is MOSI, RX is MISO
+uint32_t start_time;
+
 void SERCOM2_Handler()
 {
   Serial2.IrqHandler();
 }
 
 void setup() {
+  start_time = millis();
   pixels.begin();
   pixels.setBrightness(10);
   pixels.setPixelColor(0,pixels.Color(255,0,0));
@@ -98,20 +112,71 @@ void setup() {
   last_flash_addr = flash.read32(0);
   if (last_flash_addr == 0) { last_flash_addr = DEFAULT_STARTING_ADDR; }
   #endif
-  // pinPeripheral(MAVLINK_RX_PIN,PIO_SERCOM);
-  pinPeripheral(MAVLINK_TX_PIN,PIO_SERCOM);
   Serial.begin(115200);
   #ifdef PLANE
+  pinPeripheral(MAVLINK_RX_PIN,PIO_SERCOM);
+  pinPeripheral(MAVLINK_TX_PIN,PIO_SERCOM);
   Serial1.begin(115200);
   pinMode(A0,INPUT);
   uv_connected = true;
   #else
-  Serial1.begin(9600);
+  pinPeripheral(3,PIO_ANALOG);
+  pinPeripheral(MAVLINK_TX_PIN,PIO_SERCOM);
+  Serial1.begin(9600); //FC
   #endif
+
   Serial2.begin(4800);
   while (!Serial1) {}
+
+  #ifdef FLASH
+  uint32_t start_time = millis();
+  while (millis() - start_time < 3000) {
+    Serial.println("Type r  to read, or anything else to bypass");
+    pixels.setPixelColor(0,pixels.Color(252, 186, 3));
+    pixels.show();
+    if (Serial.available() >= 1) {
+      char in = Serial.read();
+
+      if (in == 'r') {
+        Serial.println("Reading");
+        // Dump flash
+        uint8_t buffer[128];
+        flash.readBuffer(0,buffer,sizeof(buffer));
+        for (int i = 0; i < sizeof(buffer); i++) {
+          Serial.print(buffer[i]);
+          Serial.print(" ");
+        }
+      }
+      Serial.println("Type e to exit or E to erase");
+      in = Serial.read();
+      if (in == 'E') {
+        flash.eraseChip();
+      } else {
+        Serial.println("Exiting");
+      }
+      break;
+    }
+    delay(500);
+  }
+  pixels.setPixelColor(0,pixels.Color(0, 0, 0));
+  pixels.show();
+  #endif
+
   #ifndef NO_MSP
   msp.begin(Serial1);
+  msp_get_blackbox_t response;
+  start_time = millis();
+  #ifndef PLANE
+  while (millis() - start_time < 1000) {
+    if (msp.request(MSP_BLACKBOX_CONFIG, &response, sizeof(response))) {
+      blackbox_number = response.blackbox_number_tornado;
+      sample_rate = response.sample_rate;
+      PRatio = response.PRatio;
+      break;
+    }
+    delay(100);
+  }
+  #endif
   #endif
 
   uint32_t startTime = millis();
@@ -211,20 +276,37 @@ void setup() {
   firstTime = millis();
   pixels.setPixelColor(0,pixels.Color(0,255,0));
   pixels.show();
-  delay(5000);
 }
 
 void loop() {
   static uint32_t last_time_sht = 0;
   static uint32_t last_time_lps = 0;
-  static uint32_t last_time_msp = millis();
+  // static uint32_t last_time_msp = millis();
   static uint32_t last_time_neopixel = 0;
   static uint32_t last_time_dallas_temp = 0;
   static uint32_t last_time_uv = 0;
   static uint32_t last_time_diff_pres = 0;
+  static uint32_t last_time_flash = millis();
+  static uint32_t last_time_timing = 0;
   static bool waitingOnDallasConversion = false;
-  static uint32_t start_time = millis();
+  static uint64_t mcu_micros_delta = 0;
+  start_time = millis();
   payload.timeMs = start_time-firstTime;
+  #ifndef PLANE
+  if (start_time - last_time_timing > 1000/MAV_TIMING_UPDATE) {
+    msp_sonar_altitude_t packet;
+    msp.request(MSP_SONAR_ALTITUDE,&packet,sizeof(packet)); //Millis from the fc
+    payload.timeMs = packet.altitude;
+    start_time = millis();
+    mcu_millis_less_than_msp = start_time < packet.altitude;
+    if (mcu_millis_less_than_msp) {
+      mcu_micros_delta = 1000*(uint64_t)(packet.altitude - start_time);
+    } else {
+      mcu_micros_delta = 1000*(uint64_t)(start_time - packet.altitude);
+    }
+  }
+  #endif
+  start_time = millis();
   if (sht_connected && start_time - last_time_sht > 1000/HUMIDITY_HZ) {
     sht.update();
     humidity_filter.update_sensor(sht.readHumidityPacket());
@@ -240,10 +322,11 @@ void loop() {
   if (dallas_connected && !waitingOnDallasConversion && start_time - last_time_dallas_temp > 1000/TEMP_HZ) {
     dallasTemp.requestTemperatures();
     waitingOnDallasConversion = true;
-    last_time_dallas_temp = millis();
+    last_time_dallas_temp = start_time;
   }
   if (dallas_connected && waitingOnDallasConversion && dallasTemp.isConversionComplete()) {
-      temp_ds18b20_filter.update_sensor(dallasTemp.celsiusToRaw(dallasTemp.getTempC((uint8_t*) dallasAddr)));
+    uint16_t temporary_val = dallasTemp.celsiusToRaw(dallasTemp.getTempC((uint8_t*) dallasAddr));
+      temp_ds18b20_filter.update_sensor(temporary_val);
       waitingOnDallasConversion = false;
   }
   start_time = millis();
@@ -251,14 +334,31 @@ void loop() {
     diff_pres_forward.Read();
     differential_pressure_forward_filter.update_sensor(diff_pres_forward.pres_counts());
     forward_die_temp_filter.update_sensor(diff_pres_forward.die_temp_counts());
+    last_time_diff_pres = start_time;
   }
   start_time = millis();
   if (uv_connected && start_time - last_time_uv > 1000/UV_HZ) {
      uv_filter.update_sensor(analogRead(A0));
+     last_time_uv = start_time;
   }
 
   #ifdef FLASH
-    flash.writeBuffer()
+  start_time = millis();
+  if (start_time - last_time_flash > 1000/FLASH_HZ) {
+    payload.humidity = humidity_filter.output_flash();
+    payload.temp_SHT = temp_sht_filter.output_flash();
+    payload.pressure_lps = pressure_lps_filter.output_flash();
+    payload.temp_lps = temp_lps_filter.output_flash();
+    payload.temp_ds18b20 = temp_ds18b20_filter.output_flash();
+    payload.differential_pressure_up = uv_filter.output_flash();
+    char prefix[] = "Lou";
+    last_flash_addr += flash.writeBuffer(last_flash_addr,(uint8_t*)&prefix,sizeof(prefix));
+    last_flash_addr += flash.writeBuffer(last_flash_addr,(uint8_t*)&payload,sizeof(payload));
+    uint8_t last_flash_addr_uint8[4];
+    uint32ToUint8Array(last_flash_addr, last_flash_addr_uint8);
+    flash.writeBuffer(0,last_flash_addr_uint8,sizeof(last_flash_addr_uint8));
+    last_time_flash = start_time;
+  }
   #endif
 
   #ifdef PLANE
@@ -293,7 +393,7 @@ void loop() {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     msp_raw_imu_t msp_packet;
     msp.request(MSP_RAW_IMU,&msp_packet,sizeof(msp_packet));
-    mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.acc[0],msp_packet.acc[1],msp_packet.acc[2]
+    mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(), msp_packet.acc[0],msp_packet.acc[1],msp_packet.acc[2]
     , msp_packet.gyro[0],msp_packet.gyro[1],msp_packet.gyro[2]
     , msp_packet.mag[0],msp_packet.mag[1],msp_packet.mag[2],0,1);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
@@ -306,7 +406,7 @@ void loop() {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     msp_attitude_t msp_packet;
     msp.request(MSP_ATTITUDE,&msp_packet,sizeof(msp_packet));
-    mavlink_msg_attitude_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.roll/10.0f, msp_packet.pitch/10.0f, msp_packet.yaw/1.0f,0.0f,0.0f,0.0f);
+    mavlink_msg_attitude_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(), msp_packet.roll/10.0f, msp_packet.pitch/10.0f, msp_packet.yaw/1.0f,0.0f,0.0f,0.0f);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial2.write(buf, len);
     last_time_attitude_mav = start_time;
@@ -317,7 +417,7 @@ void loop() {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     msp_raw_gps_t msp_packet;
     msp.request(MSP_RAW_GPS,&msp_packet,sizeof(msp_packet));
-    mavlink_msg_gps_raw_int_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), msp_packet.fixType, msp_packet.lat, msp_packet.lon,
+    mavlink_msg_gps_raw_int_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(), msp_packet.fixType, msp_packet.lat, msp_packet.lon,
     msp_packet.alt,UINT16_MAX,UINT16_MAX,msp_packet.groundSpeed,msp_packet.groundCourse,msp_packet.numSat,0,0,0,0,0,0);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial2.write(buf, len);
@@ -327,7 +427,7 @@ void loop() {
   if (start_time - last_time_humidity_mav > 1000/MAV_HUMIDITY_HZ) {
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    mavlink_msg_hygrometer_sensor_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(), temp_sht_filter.output(), humidity_filter.output());
+    mavlink_msg_hygrometer_sensor_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(), temp_sht_filter.output(), humidity_filter.output());
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial2.write(buf, len);
     last_time_humidity_mav = start_time;
@@ -336,7 +436,7 @@ void loop() {
   if (start_time - last_time_raw_pressure_mav > 1000/MAV_PRESSURE_HZ) {
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, micros(),pressure_lps_filter.output(),differential_pressure_forward_filter.output(),forward_die_temp_filter.output(),temp_lps_filter.output());
+    mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(),pressure_lps_filter.output(),differential_pressure_forward_filter.output(),forward_die_temp_filter.output(),temp_lps_filter.output());
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial2.write(buf, len);
     last_time_raw_pressure_mav = start_time;
@@ -355,4 +455,19 @@ void loop() {
     neopixel_state = !neopixel_state;
     last_time_neopixel = start_time;
   }
+}
+
+uint64_t calculate_micros(void) {
+  if (mcu_millis_less_than_msp) {
+    return micros() + mcu_micros_delta;
+  } else {
+    return micros() - mcu_micros_delta;
+  }
+}
+
+void uint32ToUint8Array(uint32_t value, uint8_t* array) {
+  array[0] = (uint8_t)(value & 0xFF);          // Extract the least significant byte
+  array[1] = (uint8_t)((value >> 8) & 0xFF);   // Extract the second least significant byte
+  array[2] = (uint8_t)((value >> 16) & 0xFF);  // Extract the second most significant byte
+  array[3] = (uint8_t)((value >> 24) & 0xFF);  // Extract the most significant byte
 }
