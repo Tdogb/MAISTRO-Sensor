@@ -2,6 +2,8 @@
     "files.associations": {
         "*.good": "c",
         "arduino.h": "c",
-        "adafruit_spiflash.h": "c"
-    }
+        "adafruit_spiflash.h": "c",
+        "*.bkup": "c"
+    },
+    "cmake.configureOnOpen": false
 }

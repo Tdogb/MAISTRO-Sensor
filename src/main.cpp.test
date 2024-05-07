@@ -1,44 +1,19 @@
 #include <Arduino.h>
-#include <SPI.h>
-#include <Adafruit_SPIFlash.h>
-#include "flash_config.h"
-#include <Adafruit_NeoPixel.h>
+#include "wiring_private.h" // pinPeripheral() function
+#define MAVLINK_RX_PIN 5
+#define MAVLINK_TX_PIN 4
+Uart Serial2(&sercom2,MAVLINK_RX_PIN,MAVLINK_TX_PIN,SERCOM_RX_PAD_1,UART_TX_PAD_0);
 
-Adafruit_SPIFlash flash(&flashTransport);
-Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
-
-void setup() {
-  flash.begin();
-  Serial.begin(115200);
-  pixels.begin();
-  Serial.print("JEDEC ID: 0x");
-  Serial.println(flash.getJEDECID(), HEX);
-  Serial.print("Flash size: ");
-  Serial.print(flash.size() / 1024);
-  Serial.println(" KB");
+void SERCOM2_Handler()
+{
+  Serial2.IrqHandler();
 }
 
-uint8_t buf[7];
-uint8_t buf_read[7];
+void setup() {
+  Serial2.begin(4800); //RX
+}
 
 void loop() {
-  buf[0] = 1;
-  buf[1] = 2;
-  buf[3] = 3;
-  buf[4] = 4;
-  buf[5] = 5;
-  buf[6] = 69;
-  flash.writeBuffer(0,buf,sizeof(buf));
-  pixels.setPixelColor(0,pixels.Color(255,0,0));
-  pixels.show();
-  delay(1000);
-  flash.readBuffer(0,buf_read,sizeof(buf_read));
-  Serial.printf("0: %i, 1: %i, 2: %i, 3: %i, 4: %i, 5: %i, 6: %i", buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6]);
-  pixels.setPixelColor(0,pixels.Color(0,255,0));
-  pixels.show();
-  delay(2000);
-  flash.eraseSector(0);
-  pixels.setPixelColor(0,pixels.Color(0,0,255));
-  pixels.show();
-  delay(2000);
+  Serial2.println("Hello world");
+  delay(50);
 }

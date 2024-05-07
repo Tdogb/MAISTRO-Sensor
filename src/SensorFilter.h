@@ -8,18 +8,18 @@ private:
   uint32_t N_flash = 1;
   bool first_run = true;
 public:
-  SensorFilter(int sensor_hz, int telem_hz, int flash_hz) {
+  SensorFilter(int sensor_hz, int telem_hz, int flash_hz, bool is_active=true) {
     if (telem_hz > sensor_hz) {
       N_telem = 1;
       return;
     }
-    N_telem = sensor_hz/telem_hz;
+    N_telem = sensor_hz/(2*telem_hz);
 
     if (flash_hz > sensor_hz) {
       N_flash = 1;
       return;
     }
-    N_flash = sensor_hz/flash_hz;
+    N_flash = sensor_hz/(2*flash_hz);
   }
 
   void update_sensor(T value) {

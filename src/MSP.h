@@ -70,7 +70,7 @@
 #define MSP_SET_RAW_RC           200 // 8 rc chan
 #define MSP_SET_RAW_GPS          201 // fix, numsat, lat, lon, alt, speed
 #define MSP_SET_WP               209 // sets a given WP (WP#, lat, lon, alt, flags)
-#define MSP_GET_CUSTOM_SENSORS   230
+#define MSP_GET_CUSTOM_SENSORS   231
 
 
 // bits of getActiveModes() return value 
