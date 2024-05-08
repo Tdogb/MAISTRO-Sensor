@@ -4,9 +4,11 @@ class SensorFilter
 private:
   T stored_val_telem = 0;
   T stored_val_flash = 0;
+  T unfiltered_value = 0;
   uint32_t N_telem = 1;
   uint32_t N_flash = 1;
   bool first_run = true;
+  bool enable = true;
 public:
   SensorFilter(int sensor_hz, int telem_hz, int flash_hz, bool is_active=true) {
     if (telem_hz > sensor_hz) {
@@ -23,6 +25,7 @@ public:
   }
 
   void update_sensor(T value) {
+    unfiltered_value = value;
     if (first_run) {
       stored_val_telem = value;
       stored_val_flash = value;
@@ -38,10 +41,20 @@ public:
   }
 
   T output(void) {
-    return stored_val_telem; 
+    if (enable) {
+      return stored_val_telem; 
+    }
+    return unfiltered_value;
   }
 
   T output_flash(void) {
-    return stored_val_flash;
+    if (enable) {
+      return stored_val_flash;
+    }
+    return unfiltered_value;
+  }
+
+  void disable(void) {
+    enable = false;
   }
 };

@@ -244,6 +244,7 @@ void setup() {
   }
   dallasTemp.setWaitForConversion(false);
   dallasTemp.setCheckForConversion(false);
+  temp_ds18b20_filter.disable();
 
   #ifndef PLANE
   startTime = millis();
