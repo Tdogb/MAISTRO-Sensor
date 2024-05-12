@@ -12,6 +12,8 @@
 #include "SensorFilter.h"
 #include "flash_config.h"
 #include <SdFat.h>
+#include "AllSensors_DLV.h"
+
 
 /*
 HEADER
@@ -72,7 +74,8 @@ Adafruit_LPS35HW lps35hw = Adafruit_LPS35HW();
 OneWire oneWire(DALLAS_PIN);
 DallasTemperature dallasTemp(&oneWire);
 DeviceAddress dallasAddr;
-bfs::Ms4525do diff_pres_forward;
+// bfs::Ms4525do diff_pres_forward;
+AllSensors_DLV diff_pres(&Wire, AllSensors_DLV::SensorType::DIFFERENTIAL, 10.0);
 msp_get_custom_sensors_t payload;
 uint32_t firstTime;
 bool sht_connected = false;
@@ -111,6 +114,8 @@ void SERCOM2_Handler()
 
 void setup() {
   start_time = millis();
+  Wire.begin();
+  Wire.setClock(400000);
   pixels.begin();
   pixels.setBrightness(10);
   pixels.setPixelColor(0,pixels.Color(255,0,0));
@@ -177,15 +182,16 @@ void setup() {
   msp_get_blackbox_t response;
   start_time = millis();
   #ifndef PLANE
-  while (millis() - start_time < 1000) {
-    if (msp.request(MSP_BLACKBOX_CONFIG, &response, sizeof(response))) {
-      blackbox_number = response.blackbox_number_tornado;
-      sample_rate = response.sample_rate;
-      PRatio = response.PRatio;
-      break;
-    }
-    delay(100);
-  }
+  // while (millis() - start_time < 1000) {
+  //   if (msp.request(MSP_BLACKBOX_CONFIG, &response, sizeof(response))) {
+  //     blackbox_number = response.blackbox_number_tornado;
+  //     sample_rate = response.sample_rate;
+  //     PRatio = response.PRatio;
+  //     break;
+  //   }
+  //   delay(100);
+  // }
+
   #endif
   #endif
 
@@ -247,21 +253,28 @@ void setup() {
   temp_ds18b20_filter.disable();
 
   #ifndef PLANE
-  startTime = millis();
-  diff_pres_forward.Config(&Wire, 0x28, 1.0f, -1.0f);
-  while (millis()-startTime < 1000) {
-    if (diff_pres_forward.Begin()) {
-      diff_pres_forward_connected = true;
-      break;
-    }
-    if (millis() % 1000 > 500) { //Even white blink
-      pixels.setPixelColor(0,pixels.Color(255,255,255));
-    } else {
-      pixels.setPixelColor(0,pixels.Color(0,0,0));
-    }
-    pixels.show();
-    delay(50);
-  }
+  // startTime = millis();
+  // diff_pres_forward.Config(&Wire, 0x28, 1.0f, -1.0f);
+  // while (millis()-startTime < 1000) {
+  //   if (diff_pres_forward.Begin()) {
+  //     diff_pres_forward_connected = true;
+  //     Serial.println("begun");
+  //     break;
+  //   }
+  //   Serial.println("not begun");
+  //   if (millis() % 1000 > 500) { //Even white blink
+  //     pixels.setPixelColor(0,pixels.Color(255,255,255));
+  //   } else {
+  //     pixels.setPixelColor(0,pixels.Color(0,0,0));
+  //   }
+  //   pixels.show();
+  //   delay(50);
+  // }
+  diff_pres.setTemperatureUnit(AllSensors_DLV::TemperatureUnit::CELCIUS);
+  diff_pres.setPressureUnit(AllSensors_DLV::PressureUnit::PSI);
+  diff_pres_forward_connected = true;
+
+
   #endif
   while(!Serial1) {
     if (millis() % 1000 > 500) { //Slow even blue blink
@@ -341,9 +354,10 @@ void loop() {
   }
   start_time = millis();
   if (diff_pres_forward_connected && start_time - last_time_diff_pres > 1000/AIRSPEED_HZ) {
-    diff_pres_forward.Read();
-    differential_pressure_forward_filter.update_sensor(diff_pres_forward.pres_counts());
-    forward_die_temp_filter.update_sensor(diff_pres_forward.die_temp_counts());
+    // diff_pres_forward.Read();
+    diff_pres.readData();
+    differential_pressure_forward_filter.update_sensor((uint32_t)(diff_pres.raw_p));
+    forward_die_temp_filter.update_sensor((uint16_t)(diff_pres.temperature * 100));
     last_time_diff_pres = start_time;
   }
   start_time = millis();
@@ -378,7 +392,9 @@ void loop() {
     payload.pressure_lps = pressure_lps_filter.output();
     payload.temp_lps = temp_lps_filter.output();
     payload.temp_ds18b20 = temp_ds18b20_filter.output();
-    payload.differential_pressure_up = uv_filter.output();
+    payload.differential_pressure_forward = differential_pressure_forward_filter.output();
+    payload.forward_die_temp = forward_die_temp_filter.output();
+    // payload.differential_pressure_up = uv_filter.output();
     msp.command(MSP_GET_CUSTOM_SENSORS, &payload, sizeof(payload));
     last_time_msp = start_time;
   }

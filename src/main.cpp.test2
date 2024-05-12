@@ -1,0 +1,26 @@
+#include <Arduino.h>
+#include "AllSensors_DLV.h"
+
+AllSensors_DLV diff_pres(&Wire, AllSensors_DLV::SensorType::DIFFERENTIAL, 10.0);
+
+void setup() {
+  /* Serial to display data */
+  Serial.begin(9600);
+  while(!Serial){}
+  Wire.begin();
+//   Wire.setClock(400000);
+
+  /* Starting communication with the pressure transducer */
+//   if (!pres.Begin()) {
+//     Serial.println("Error communicating with sensor");
+//     while(1){}
+//   }
+    diff_pres.setTemperatureUnit(AllSensors_DLV::TemperatureUnit::CELCIUS);
+    diff_pres.setPressureUnit(AllSensors_DLV::PressureUnit::PASCAL);
+}
+
+void loop() {
+    diff_pres.readData();
+    Serial.printf("%f  %f\n", diff_pres.temperature, diff_pres.pressure);
+    delay(100);
+}
