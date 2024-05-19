@@ -36,7 +36,7 @@ enum flash_ids {
 #define DEFAULT_STARTING_ADDR 0x50
 
 #define HUMIDITY_HZ 1
-#define PRESSURE_HZ 75
+#define PRESSURE_HZ 25
 #define AIRSPEED_HZ 50
 #define TEMP_HZ 10
 #define MSP_HZ 20
@@ -104,7 +104,7 @@ SensorFilter<typeof(payload.differential_pressure_forward)> differential_pressur
 SensorFilter<typeof(payload.forward_die_temp)> forward_die_temp_filter(AIRSPEED_HZ,MSP_HZ,FLASH_HZ);
 SensorFilter<typeof(payload.differential_pressure_up)> uv_filter(UV_HZ,MSP_HZ,FLASH_HZ);
 
-Uart Serial2(&sercom2,MAVLINK_RX_PIN,MAVLINK_TX_PIN,SERCOM_RX_PAD_1,UART_TX_PAD_2);
+Uart Serial2(&sercom2,MAVLINK_RX_PIN,MAVLINK_TX_PIN,SERCOM_RX_PAD_0,UART_TX_PAD_2);
 uint32_t start_time;
 
 void SERCOM2_Handler()
@@ -114,8 +114,8 @@ void SERCOM2_Handler()
 
 void setup() {
   start_time = millis();
-  Wire.begin();
-  Wire.setClock(400000);
+  Wire.setClock(220000);
+  // Wire.begin();
   pixels.begin();
   pixels.setBrightness(10);
   pixels.setPixelColor(0,pixels.Color(255,0,0));
@@ -179,7 +179,7 @@ void setup() {
 
   #ifndef NO_MSP
   msp.begin(Serial1);
-  msp_get_blackbox_t response;
+  // msp_get_blackbox_t response;
   start_time = millis();
   #ifndef PLANE
   // while (millis() - start_time < 1000) {
@@ -230,7 +230,7 @@ void setup() {
     delay(50);
   }
   if (lps_connected) {
-    lps35hw.setDataRate(LPS35HW_RATE_75_HZ);
+    lps35hw.setDataRate(LPS35HW_RATE_25_HZ);
     lps35hw.resetPressure(); //Absolute pressure mode
   }
   startTime = millis();
@@ -317,54 +317,74 @@ void loop() {
   // static uint64_t mcu_micros_delta = 0;
   start_time = millis();
   payload.timeMs = start_time-firstTime;
-  if (start_time - last_time_timing > 1000/MAV_TIMING_UPDATE) {
-    msp_sonar_altitude_t packet;
-    msp.request(MSP_SONAR_ALTITUDE,&packet,sizeof(packet)); //Millis from the fc
-    payload.timeMs = packet.altitude;
-    start_time = millis();
-    mcu_millis_less_than_msp = start_time < packet.altitude;
-    if (mcu_millis_less_than_msp) {
-      mcu_micros_delta = 1000*(uint64_t)(packet.altitude - start_time);
-    } else {
-      mcu_micros_delta = 1000*(uint64_t)(start_time - packet.altitude);
-    }
-  }
+  // if (start_time - last_time_timing > 1000/MAV_TIMING_UPDATE) {
+  //   msp_sonar_altitude_t packet;
+  //   msp.request(MSP_SONAR_ALTITUDE,&packet,sizeof(packet)); //Millis from the fc
+  //   payload.timeMs = packet.altitude;
+  //   start_time = millis();
+  //   mcu_millis_less_than_msp = start_time < packet.altitude;
+  //   if (mcu_millis_less_than_msp) {
+  //     mcu_micros_delta = 1000*(uint64_t)(packet.altitude - start_time);
+  //   } else {
+  //     mcu_micros_delta = 1000*(uint64_t)(start_time - packet.altitude);
+  //   }
+  // }
   start_time = millis();
   if (sht_connected && start_time - last_time_sht > 1000/HUMIDITY_HZ) {
+    Serial.println("sht start");
     sht.update();
+    Serial.println("sht after update");
+
     humidity_filter.update_sensor(sht.readHumidityPacket());
     temp_sht_filter.update_sensor(sht.readTemperaturePacket());
+    Serial.println("sht end");
+    last_time_sht = start_time;
   }
   start_time = millis();
   if (lps_connected && start_time - last_time_lps > 1000/PRESSURE_HZ) {
+    Serial.println("lps start");
+
     pressure_lps_filter.update_sensor(lps35hw.readPressureRaw());
+    Serial.println("done pressure lps");
     temp_lps_filter.update_sensor(lps35hw.readTemperatureRaw());
+    Serial.println("done temp lps");
     last_time_lps = start_time;
+    Serial.println("lps end");
+
   }
   start_time = millis();
   if (dallas_connected && !waitingOnDallasConversion && start_time - last_time_dallas_temp > 1000/TEMP_HZ) {
+    Serial.println("request start");
     dallasTemp.requestTemperatures();
     waitingOnDallasConversion = true;
     last_time_dallas_temp = start_time;
+    Serial.println("request done");
+
   }
   if (dallas_connected && waitingOnDallasConversion && dallasTemp.isConversionComplete()) {
+    Serial.println("dallas");
     uint16_t temporary_val = dallasTemp.celsiusToRaw(dallasTemp.getTempC((uint8_t*) dallasAddr));
       temp_ds18b20_filter.update_sensor(temporary_val);
       waitingOnDallasConversion = false;
+    Serial.println("dallas done");
+
   }
   start_time = millis();
   if (diff_pres_forward_connected && start_time - last_time_diff_pres > 1000/AIRSPEED_HZ) {
-    // diff_pres_forward.Read();
+    Serial.println("diff pres");
+
     diff_pres.readData();
     differential_pressure_forward_filter.update_sensor((uint32_t)(diff_pres.raw_p));
     forward_die_temp_filter.update_sensor((uint16_t)(diff_pres.temperature * 100));
     last_time_diff_pres = start_time;
+    Serial.println("diff pres done");
+
   }
-  start_time = millis();
-  if (uv_connected && start_time - last_time_uv > 1000/UV_HZ) {
-     uv_filter.update_sensor(analogRead(A0));
-     last_time_uv = start_time;
-  }
+  // start_time = millis();
+  // if (uv_connected && start_time - last_time_uv > 1000/UV_HZ) {
+  //    uv_filter.update_sensor(analogRead(A0));
+  //    last_time_uv = start_time;
+  // }
 
   #ifdef FLASH
   start_time = millis();
@@ -387,6 +407,7 @@ void loop() {
 
   start_time = millis();
   if (start_time - last_time_msp > 1000/MSP_HZ) {
+    Serial.println("MSP");
     payload.humidity = humidity_filter.output();
     payload.temp_SHT = temp_sht_filter.output();
     payload.pressure_lps = pressure_lps_filter.output();
@@ -408,7 +429,7 @@ void loop() {
   static mavlink_message_t msg; 
   static mavlink_status_t status;
   while (Serial2.available() > 0) {
-  // Serial.println("Mav available");
+  Serial.println("Mav available");
     uint8_t c = Serial2.read();
     if (mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)) {
       if (msg.msgid == MAVLINK_MSG_ID_COMMAND_INT) {
@@ -432,6 +453,7 @@ void loop() {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC, MAV_MODE_FLAG_MANUAL_INPUT_ENABLED, 0, MAV_STATE_STANDBY);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial.println("Heartbeat");
     Serial2.write(buf, len);
     last_time_heartbeat_mav = start_time;
   }
@@ -461,6 +483,7 @@ void loop() {
   }
   start_time = millis();
   if (start_time - last_time_raw_gps_mav > 1000/MAV_GPS_HZ) {
+    Serial.println("gps");   
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     msp_raw_gps_t msp_packet;
@@ -473,6 +496,7 @@ void loop() {
   }
   start_time = millis();
   if (start_time - last_time_humidity_mav > 1000/MAV_HUMIDITY_HZ) {
+    Serial.println("hum");
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     mavlink_msg_hygrometer_sensor_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(), temp_sht_filter.output(), humidity_filter.output());
@@ -482,6 +506,7 @@ void loop() {
   }
   start_time = millis();
   if (start_time - last_time_raw_pressure_mav > 1000/MAV_PRESSURE_HZ) {
+    Serial.println("pres");
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(),pressure_lps_filter.output(),differential_pressure_forward_filter.output(),forward_die_temp_filter.output(),temp_lps_filter.output());
@@ -493,6 +518,7 @@ void loop() {
   start_time = millis();
   static bool neopixel_state = true;
   if (start_time - last_time_neopixel > 1000/NEOPIXEL_HZ) {
+    Serial.println("Neo");
     if(neopixel_state){
       pixels.setPixelColor(0,pixels.Color(0,255,0));
     } else {
