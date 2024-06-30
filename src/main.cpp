@@ -509,6 +509,7 @@ void loop() {
     Serial.println("pres");
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    pressure_lps_filter is being cast to a uint16_t
     mavlink_msg_raw_pressure_pack(1, MAV_COMP_ID_AUTOPILOT1, &msg, calculate_micros(),pressure_lps_filter.output(),differential_pressure_forward_filter.output(),forward_die_temp_filter.output(),temp_lps_filter.output());
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial2.write(buf, len);
